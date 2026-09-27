@@ -88,20 +88,23 @@ function recorder() {
   };
 }
 
-test('the worker is opt-in through TOKEN_MONITOR_USAGE_WORKER', () => {
-  assert.equal(usageWorkerRequested({}), false);
-  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: '' }), false);
-  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: '0' }), false);
-  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: 'off' }), false);
+test('the worker is on by default, and TOKEN_MONITOR_USAGE_WORKER=0 pins the collector to this thread', () => {
+  assert.equal(usageWorkerRequested({}), true);
+  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: '' }), true);
   assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: '1' }), true);
-  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: 'true' }), true);
+  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: '0' }), false);
+  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: 'false' }), false);
+  assert.equal(usageWorkerRequested({ TOKEN_MONITOR_USAGE_WORKER: ' OFF ' }), false);
 });
 
 test('without the worker the collector starts on this thread with the options untouched', () => {
   const inProcess = fakeInProcessCollector();
   const options = { clients: 'codex', onUpdate() {} };
 
-  const runtime = createUsageHost(options, {}, { env: {}, startCollector: inProcess.startCollector });
+  const runtime = createUsageHost(options, {}, {
+    env: { TOKEN_MONITOR_USAGE_WORKER: '0' },
+    startCollector: inProcess.startCollector
+  });
 
   assert.equal(runtime, inProcess.started[0]);
   assert.equal(inProcess.started[0].options, options);
@@ -255,6 +258,64 @@ test('the quit path lets the worker stop its collector rather than terminating i
   assert.equal(FakeWorker.last().terminated, 0);
   FakeWorker.last().reply({ type: 'stopped' });
   await runtime.whenIdle();
+});
+
+test('the quit path signals the subprocesses of every worker that has not exited', async () => {
+  FakeWorker.reset();
+  const killed = [];
+  const coordinator = createUsageHostCoordinator({
+    Worker: FakeWorker,
+    killSubprocess: (pid, signal) => killed.push([pid, signal])
+  });
+  const runtime = coordinator.create(recorder().options);
+  await flush();
+  const table = FakeWorker.last().workerData.liveSubprocesses;
+  Atomics.store(table, 0, 4101);
+  Atomics.store(table, 3, 4102);
+
+  runtime.stop({ skipCloseWatchers: true });
+  coordinator.terminateSubprocesses();
+  assert.deepEqual(killed, [[4101, 'SIGTERM'], [4102, 'SIGTERM']]);
+
+  // Once the worker has exited, nothing updates its table any more, and a PID
+  // left in it may already belong to another process.
+  FakeWorker.last().reply({ type: 'stopped' });
+  await runtime.whenIdle();
+  killed.length = 0;
+  coordinator.terminateSubprocesses();
+  assert.deepEqual(killed, []);
+});
+
+test('a worker that exits without finishing its stop has its subprocesses terminated', async () => {
+  FakeWorker.reset();
+  const killed = [];
+  const inProcess = fakeInProcessCollector();
+  const coordinator = createUsageHostCoordinator({
+    Worker: FakeWorker,
+    startCollector: inProcess.startCollector,
+    stopGraceMs: 5,
+    killSubprocess: (pid, signal) => killed.push([pid, signal])
+  });
+
+  const crashed = coordinator.create(recorder().options);
+  await flush();
+  Atomics.store(FakeWorker.last().workerData.liveSubprocesses, 0, 4301);
+  FakeWorker.last().emit('exit', 1);
+  assert.deepEqual(killed, [[4301, 'SIGTERM']]);
+  crashed.stop();
+
+  // Past the stop grace: terminated before its collector stopped anything.
+  killed.length = 0;
+  const hung = createUsageHostCoordinator({
+    Worker: FakeWorker,
+    stopGraceMs: 5,
+    killSubprocess: (pid, signal) => killed.push([pid, signal])
+  }).create(recorder().options);
+  await flush();
+  Atomics.store(FakeWorker.last().workerData.liveSubprocesses, 2, 4302);
+  hung.stop();
+  await hung.whenIdle();
+  assert.deepEqual(killed, [[4302, 'SIGTERM']]);
 });
 
 test('a replacement worker starts only after the previous one has exited', async () => {
@@ -470,6 +531,61 @@ test('a settings change during a replacement is confirmed only once the previous
   // the replacement started paused.
   assert.equal(archive.sessions['codex:handover-a'].periods.allTime.totalTokens, 120);
   assert.equal(archive.sessions['codex:handover-b'], undefined);
+});
+
+// Exits the process right after stopping, as performQuit() does, and reports
+// whether the worker's subprocess is still running once `waitMs` has passed or,
+// sooner, once it has gone.
+async function subprocessAfterQuit(mode, waitMs) {
+  const { execFileSync } = require('node:child_process');
+  const quit = path.join(__dirname, '..', 'fixtures', 'usageHostQuit.js');
+  const pid = Number(execFileSync(process.execPath, [quit, mode], { env: process.env, encoding: 'utf8' }).trim());
+  assert.ok(pid > 0);
+  const alive = () => { try { process.kill(pid, 0); return true; } catch (_) { return false; } };
+  const deadline = Date.now() + waitMs;
+  while (alive() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  const survived = alive();
+  if (survived) process.kill(pid);
+  return survived;
+}
+
+// Running, as opposed to gone or a zombie: a subprocess of a worker that has
+// died is never reaped, because the loop that would reap it is gone with it.
+function subprocessRunning(pid) {
+  const { execFileSync } = require('node:child_process');
+  try {
+    return !execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim().startsWith('Z');
+  } catch (_) {
+    return false;
+  }
+}
+
+// Windows has no ps; the lifecycle test above covers the logic there.
+test('a real worker that crashes does not leave its subprocess running', { skip: process.platform === 'win32' }, async () => {
+  const inProcess = fakeInProcessCollector();
+  const coordinator = createUsageHostCoordinator({ workerPath: SCRIPTED_WORKER, startCollector: inProcess.startCollector });
+  const { events, options } = recorder();
+  const runtime = coordinator.create(options, { agentPidPath: path.join(sharedDir, 'no-agent.pid') });
+
+  assert.equal(await runtime.tick('spawn'), true);
+  const spawned = events.find(([kind, message]) => kind === 'log' && /spawned$/.test(message));
+  const pid = Number(/^child (\d+) spawned$/.exec(spawned[1])[1]);
+  await runtime.tick('crash');
+  assert.equal(inProcess.started.length, 1, 'fell back to this thread');
+
+  const deadline = Date.now() + 5000;
+  while (subprocessRunning(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  const survived = subprocessRunning(pid);
+  if (survived) process.kill(pid);
+  assert.equal(survived, false);
+  runtime.stop();
+});
+
+test('a subprocess on the worker does not outlive a process that exits right after stopping it', async () => {
+  // The stop message alone does not reach the worker before the exit. Windows
+  // is exempt: libuv puts children in a job object that dies with the process.
+  if (process.platform !== 'win32') assert.equal(await subprocessAfterQuit('without-terminate', 300), true);
+  assert.equal(await subprocessAfterQuit('with-terminate', 5000), false);
 });
 
 test('a real worker that crashes hands its pending call to this thread', async () => {

@@ -10485,7 +10485,9 @@ function moveOpenCodeLocalFallbackSetting() {
 // panel only turns the answer into its message line and the pending pill;
 // generated and hand-built panels share this, including which messages they
 // may override (`messages.required` / `rejected` / `invalidFormat`).
+let claudeOrganizationChoicesRevision = 0;
 async function saveAccountCredential(id, values, { messages = {}, failedKey, clearInput = () => {} } = {}) {
+  if (id === 'claude') claudeOrganizationChoicesRevision += 1;
   const provider = LIMIT_PROVIDERS.find((entry) => entry.id === id);
   const name = provider?.settingsLabel || provider?.label || id;
   setAccountPanelMessage(id, null);
@@ -10499,6 +10501,13 @@ async function saveAccountCredential(id, values, { messages = {}, failedKey, cle
     return result;
   }
   if (result?.verdict === 'superseded') return result;
+  if (id === 'claude') claudeOrganizationChoicesRevision += 1;
+  if (id === 'claude' && result?.choices) renderClaudeOrganizationChoices(result.choices, result.settings?.claudeWebOrganizationId || values.claudeWebOrganizationId);
+  if (id === 'claude' && result?.verdict === 'selectionRequired') {
+    setAccountPanelMessage(id, { key: 'settings.claude.organizationRequired', tone: 'notice' });
+    renderExternalProviderStatus(id);
+    return result;
+  }
   if (!result?.saved) {
     const rejection = {
       required: { key: messages.required || 'settings.common.credentialRequired' },
@@ -10544,8 +10553,13 @@ async function submitAccountCredential(button, id, values, options) {
 }
 
 async function clearAccountCredential(id) {
+  if (id === 'claude') claudeOrganizationChoicesRevision += 1;
   setAccountPanelMessage(id, null);
   await commitAccountCredential(() => window.tokenMonitor.limits.clearCredential(id));
+  if (id === 'claude') {
+    claudeOrganizationChoicesRevision += 1;
+    renderClaudeOrganizationChoices([]);
+  }
   clearExternalProviderCheckPending(id);
   clearExternalProviderPendingStatus(id);
   renderExternalProviderStatus(id);
@@ -10563,11 +10577,59 @@ function limitAccountForm(providerId) {
   return state.settings?.limitAccountForms?.find((form) => form.id === providerId);
 }
 
+function renderClaudeOrganizationChoices(choices, selectedId = state.settings?.claudeWebOrganizationId || '') {
+  const select = document.getElementById('claudeWebOrganizationIdInput');
+  if (!select) return false;
+  document.getElementById('claudeWebOrganizationRow')?.classList.toggle('hidden', choices.length === 0);
+  select.options.length = 0;
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = t('settings.claude.organizationChoose');
+  select.append(placeholder);
+  for (const choice of choices) {
+    const option = document.createElement('option');
+    option.value = choice.id;
+    option.textContent = [choice.name || choice.id, choice.plan ? choice.plan[0].toUpperCase() + choice.plan.slice(1) : ''].filter(Boolean).join(' · ');
+    select.append(option);
+  }
+  const selectedAvailable = choices.some((choice) => choice.id === selectedId);
+  select.value = selectedAvailable ? selectedId : !selectedId && choices.length === 1 ? choices[0].id : '';
+  select.disabled = choices.length === 0;
+  return selectedAvailable;
+}
+
+async function loadClaudeOrganizationChoices() {
+  const revision = ++claudeOrganizationChoicesRevision;
+  try {
+    const result = await window.tokenMonitor.limits.listOrganizationChoices('claude');
+    if (revision !== claudeOrganizationChoicesRevision) return;
+    if (result.status === 'ok') {
+      const selectedAvailable = renderClaudeOrganizationChoices(result.choices);
+      if (!selectedAvailable && (state.settings?.claudeWebOrganizationId || result.choices.length > 1)) {
+        setAccountPanelMessage('claude', { key: state.settings?.claudeWebOrganizationId
+          ? 'settings.claude.organizationUnavailable'
+          : 'settings.claude.organizationSelect', tone: 'notice' });
+      }
+    } else setAccountPanelMessage('claude', { key: 'settings.claude.organizationLoadFailed', tone: 'notice' });
+  } catch (_) {
+    if (revision !== claudeOrganizationChoicesRevision) return;
+    setAccountPanelMessage('claude', { key: 'settings.claude.organizationLoadFailed', tone: 'notice' });
+  }
+}
+
 // A select beside a credential (region, site, console) saves as soon as it
 // changes. `clears` names what the change invalidates: an Alibaba cookie
 // belongs to the console it was copied from and cannot authenticate the other
 // one, so switching drops it instead of leaving a key that can only fail.
 async function saveAccountFormSetting({ id }, field, value) {
+  if (id === 'claude' && field.key === 'claudeWebOrganizationId') {
+    if (!value || !state.settings?.claudeWebCookieConfigured || document.getElementById('claudeWebCookieInput')?.value) return;
+    claudeOrganizationChoicesRevision += 1;
+    await saveSettings({ claudeWebOrganizationId: value });
+    setAccountPanelMessage('claude', null);
+    await refreshStats({ force: true });
+    return;
+  }
   if (!field.saveOnChange) return;
   const cleared = Object.fromEntries((field.clears || []).map((key) => [key, '']));
   await saveSettings({ [field.key]: value, ...cleared });
@@ -10591,7 +10653,10 @@ function setupLimitAccountPanels() {
         document,
         provider: externalProviderForAccount(form.id)
       })),
-      onRefresh: () => refreshStats({ force: true }),
+      onRefresh: async () => {
+        if (form.id === 'claude') await loadClaudeOrganizationChoices();
+        await refreshStats({ force: true });
+      },
       onClear: ({ id }) => clearAccountCredential(id),
       onSave: ({ id, messages, failedKey }, values, clearInput) => saveAccountCredential(id, values, { messages, failedKey, clearInput }),
       onFieldChange: (form, field, value) => saveAccountFormSetting(form, field, value)
@@ -10604,6 +10669,7 @@ function setupLimitAccountPanels() {
     added = true;
     setExternalAccountExpanded(form.id, false);
     limitAccountPanelsApi.syncCredentialFields(form, { document, settings: state.settings });
+    if (form.id === 'claude' && state.settings?.claudeWebCookieConfigured) void loadClaudeOrganizationChoices();
     renderExternalProviderStatus(form.id);
   }
   if (added) initSettingsAnimationWrappers();

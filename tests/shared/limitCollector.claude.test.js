@@ -370,10 +370,10 @@ test('Claude Web retries later rotation from the last persisted sessionKey after
   ]);
 });
 
-test('Claude Web prefers chat-capable organizations, then non-API-only organizations', async () => {
-  async function selectedUsageOrganization(organizations, cookie) {
+test('Claude Web reads only the explicitly selected organization when several are available', async () => {
+  async function selectedUsageOrganization(organizations, cookie, selectedId) {
     let usageOrganizationId = '';
-    await fetchClaudeLimits({ claudeWebCookie: cookie }, {
+    await fetchClaudeLimits({ claudeWebCookie: cookie, claudeWebOrganizationId: selectedId, claudePrepaidBalanceEnabled: false }, {
       providerRuntimeState: new Map(),
       fetch: async (url) => {
         if (url.endsWith('/api/organizations')) {
@@ -410,22 +410,53 @@ test('Claude Web prefers chat-capable organizations, then non-API-only organizat
       { uuid: 'organization-api', capabilities: ['API'] },
       { uuid: 'organization-non-api', capabilities: ['files'] },
       { uuid: 'organization-chat', capabilities: ['CHAT', 'files'] }
-    ], 'sessionKey=sk-ant-chat'),
+    ], 'sessionKey=sk-ant-chat', 'organization-chat'),
     'organization-chat'
   );
   assert.equal(
     await selectedUsageOrganization([
       { uuid: 'organization-api', capabilities: ['api'] },
       { uuid: 'organization-non-api', capabilities: ['files'] }
-    ], 'sessionKey=sk-ant-non-api'),
+    ], 'sessionKey=sk-ant-non-api', 'organization-non-api'),
     'organization-non-api'
   );
   assert.equal(
     await selectedUsageOrganization([
       { uuid: 'organization-api-first', capabilities: ['api'] },
       { uuid: 'organization-api-second', capabilities: ['api'] }
-    ], 'sessionKey=sk-ant-first'),
+    ], 'sessionKey=sk-ant-first', 'organization-api-first'),
     'organization-api-first'
+  );
+  assert.equal(
+    await selectedUsageOrganization([
+      { uuid: 'organization-api', capabilities: ['api'] },
+      { uuid: 'organization-chat', capabilities: ['chat'] }
+    ], 'sessionKey=sk-ant-only-chat'),
+    'organization-chat',
+    'one eligible chat organization is selected without prompting'
+  );
+});
+
+test('Claude Web requires a choice for multiple organizations and never falls back from a missing selection', async () => {
+  const organizations = [
+    { uuid: 'free', name: 'Personal', capabilities: ['chat'] },
+    { uuid: 'team', name: 'Workspace', capabilities: ['chat', 'raven'], raven_type: 'team' }
+  ];
+  const deps = {
+    providerRuntimeState: new Map(),
+    fetch: async (url) => {
+      assert.ok(url.endsWith('/api/organizations'));
+      return { ok: true, json: async () => organizations };
+    }
+  };
+  await assert.rejects(
+    fetchClaudeLimits({ claudeWebCookie: 'sessionKey=sk-ant-multi' }, deps),
+    (error) => error.code === 'CLAUDE_WEB_ORGANIZATION_SELECTION_REQUIRED'
+      && error.organizationChoices.map((choice) => choice.id).join(',') === 'free,team'
+  );
+  await assert.rejects(
+    fetchClaudeLimits({ claudeWebCookie: 'sessionKey=sk-ant-multi', claudeWebOrganizationId: 'missing' }, deps),
+    (error) => error.code === 'CLAUDE_WEB_ORGANIZATION_NOT_FOUND'
   );
 });
 
@@ -475,6 +506,34 @@ test('Claude Web caches stable identity and reuses it when account lookup is tra
   assert.equal(second.windows[0].usedPercent, 37);
   assert.equal(requests.some((url) => url.endsWith('/api/account')), true);
   assert.equal(requests.some((url) => url.endsWith('/usage?cedar_ember=1')), true);
+});
+
+test('Claude Web does not label a newly selected organization with another organization’s stale identity', async () => {
+  const free = { uuid: 'free', name: 'Personal', capabilities: ['chat'] };
+  const team = { uuid: 'team', name: 'Workspace', capabilities: ['chat', 'raven'], raven_type: 'team' };
+  let nowMs = 1000;
+  let accountAvailable = true;
+  const deps = {
+    now: () => nowMs,
+    providerRuntimeState: new Map(),
+    fetch: async (url) => {
+      if (url.endsWith('/api/organizations')) return { ok: true, json: async () => [free, team] };
+      if (url.includes('/usage?')) return { ok: true, json: async () => ({ five_hour: { utilization: 82 } }) };
+      if (url.endsWith('/api/account')) return accountAvailable
+        ? { ok: true, json: async () => ({ uuid: 'account', memberships: [{ organization: free }, { organization: team }] }) }
+        : { ok: false, status: 503 };
+      throw new Error(`unexpected endpoint ${url}`);
+    }
+  };
+  const options = { claudeWebCookie: 'sessionKey=sk-ant-switch', claudePrepaidBalanceEnabled: false };
+  const first = await fetchClaudeLimits({ ...options, claudeWebOrganizationId: 'free' }, deps);
+  assert.equal(first.accountName, 'Personal');
+  accountAvailable = false;
+  nowMs += 1000;
+  await assert.rejects(
+    fetchClaudeLimits({ ...options, claudeWebOrganizationId: 'team' }, deps),
+    (error) => error.code === 'CLAUDE_IDENTITY_UNAVAILABLE'
+  );
 });
 
 test('Claude Web requires the account endpoint on a cold identity cache', async () => {

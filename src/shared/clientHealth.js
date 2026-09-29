@@ -219,6 +219,8 @@ const CLIENT_SOURCE_CHECK_IDS = Object.freeze([
   'qodercn-projects',
   REASONIX_SOURCE_CHECK_ID,
   'qwen-projects',
+  'senpi-omo-children',
+  'senpi-sessions',
   'tokscale-antigravity-cache',
   'tokscale-cursor-cache',
   'unsloth-db',

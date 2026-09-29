@@ -29,6 +29,12 @@ const SOURCE_MARKERS = [
   { marker: '.local/share/amp/threads', client: 'amp' },
   { marker: '.pi/agent/sessions', client: 'pi', hostCheckId: 'pi-sessions' },
   { marker: '.omp/agent/sessions', client: 'omp', hostCheckId: 'omp-sessions' },
+  // Senpi's agent dir honors SENPI_CODING_AGENT_DIR, so the default spelling
+  // stays a detection marker only — the watch root is resolved explicitly in
+  // clientSources.js (same pattern as CODEX_HOME). The OmO task-children root
+  // is home-fixed, so it gets the shared host source.
+  { marker: '.senpi/agent/sessions', client: 'senpi' },
+  { marker: '.omo/senpi-task/children', client: 'senpi', hostCheckId: 'senpi-omo-children' },
   { marker: '.local/share/zed/threads/threads.db', client: 'zed' },
   { marker: '.local/share/kilo/kilo.db', client: 'kilo' },
   { marker: '.config/Code/User/globalStorage/kilocode.kilo-code/tasks', client: 'kilo' },

@@ -477,6 +477,37 @@ test('Muse watches the same XDG sessions root used for source detection', () => 
   assert.deepEqual(clientSourceChecks('muse', options).muse.map((check) => check.id), ['muse-sessions']);
 });
 
+test('Senpi watches the agent sessions and OmO task-children roots', () => {
+  const homeDir = path.join(os.tmpdir(), 'senpi-source-home');
+  const options = { homeDir, env: {} };
+  const sessionsDir = path.join(homeDir, '.senpi', 'agent', 'sessions');
+  const omoDir = path.join(homeDir, '.omo', 'senpi-task', 'children');
+  assert.deepEqual(clientSourceRoots('senpi', options).senpi, [
+    { id: 'senpi-sessions', dir: sessionsDir },
+    { id: 'senpi-omo-children', dir: omoDir }
+  ]);
+  assert.deepEqual(clientWatchCandidates('senpi', options).senpi, [sessionsDir, omoDir]);
+  assert.deepEqual(clientSourceChecks('senpi', options).senpi.map((check) => check.id), [
+    'senpi-sessions', 'senpi-omo-children'
+  ]);
+});
+
+test('Senpi session roots honor the agent-dir and session-dir env overrides', () => {
+  const homeDir = path.join(os.tmpdir(), 'senpi-env-home');
+  const agentDir = path.join(homeDir, 'custom-senpi-agent');
+  const sessionDir = path.join(homeDir, 'custom-senpi-children');
+  const options = { homeDir, env: { SENPI_CODING_AGENT_DIR: agentDir, SENPI_CODING_AGENT_SESSION_DIR: sessionDir } };
+  const omoDir = path.join(homeDir, '.omo', 'senpi-task', 'children');
+  assert.deepEqual(clientSourceRoots('senpi', options).senpi, [
+    { id: 'senpi-sessions', dir: path.join(agentDir, 'sessions') },
+    { id: 'senpi-sessions', dir: sessionDir },
+    { id: 'senpi-omo-children', dir: omoDir }
+  ]);
+  assert.deepEqual(clientWatchCandidates('senpi', options).senpi, [
+    path.join(agentDir, 'sessions'), sessionDir, omoDir
+  ]);
+});
+
 test('source observations keep exact files, optional roots and WSL health in sync with diagnostics', () => {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-source-observations-'));
   const previousHome = os.homedir;

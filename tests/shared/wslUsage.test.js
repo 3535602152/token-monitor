@@ -62,6 +62,13 @@ test('homeHasData detects Muse sessions in a WSL home', () => {
   assert.deepEqual(homeHasData(home, (path) => path === marker), ['muse']);
 });
 
+test('homeHasData detects Senpi sessions and OmO task children in a WSL home', () => {
+  const home = '\\\\wsl$\\Ubuntu\\home\\u';
+  for (const marker of ['.senpi\\agent\\sessions', '.omo\\senpi-task\\children']) {
+    assert.deepEqual(homeHasData(home, (path) => path === `${home}\\${marker}`), ['senpi'], marker);
+  }
+});
+
 test('homeHasData attributes Kilo CLI and extension markers to one client', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   for (const marker of [

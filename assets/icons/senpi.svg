@@ -1,0 +1,3 @@
+<!-- Senpi (OmO Native) mark — stone tablet with a `>_` prompt, drawn as a solid
+     tile with the glyph knocked out so it stays legible as a CSS mask. -->
+<svg fill="currentColor" fill-rule="evenodd" height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><title>Senpi</title><path d="M6.5 3h11A3.5 3.5 0 0 1 21 6.5v11a3.5 3.5 0 0 1-3.5 3.5h-11A3.5 3.5 0 0 1 3 17.5v-11A3.5 3.5 0 0 1 6.5 3Zm1.7 4.2a.9.9 0 0 0-1.2 1.3l3 3-3 3a.9.9 0 0 0 1.2 1.3l4.3-4.3a.9.9 0 0 0 0-1.3Zm5.3 8.5a.9.9 0 0 0 0 1.8h4.4a.9.9 0 0 0 0-1.8Z"/></svg>

@@ -28,7 +28,9 @@ const SOURCE_ENV_KEYS = Object.freeze([
   'KIMI_CODE_HOME',
   'GEMINI_CLI_HOME',
   'HERMES_HOME',
-  'UNSLOTH_STUDIO_HOME'
+  'UNSLOTH_STUDIO_HOME',
+  'SENPI_CODING_AGENT_DIR',
+  'SENPI_CODING_AGENT_SESSION_DIR'
 ]);
 
 // Applied to a whole file rather than case by case, so a test added later is

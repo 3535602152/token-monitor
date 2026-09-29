@@ -179,6 +179,16 @@ test('LM Studio has a label and uses the standard mask-safe icon path', () => {
   assert.equal(fs.existsSync(path.join(__dirname, '..', '..', '.github', 'assets', 'tools-icon', 'lmstudio.png')), true);
 });
 
+test('Senpi has a label and uses the standard mask-safe icon path', () => {
+  const styles = rendererStyles();
+  assert.ok(clientLabelIds().has('senpi'));
+  assertUsageMarks('senpi');
+  assert.match(styles, /\.row-icon-senpi\s*\{[^}]*mask-image:\s*url\([^)]*assets\/icons\/senpi\.svg\)/s);
+  assert.doesNotMatch(styles, /\.row-icon-senpi\s*\{[^}]*background-image:/s);
+  assert.ok(fs.existsSync(path.join(__dirname, '..', '..', 'assets', 'icons', 'senpi.svg')));
+  assert.ok(fs.existsSync(path.join(__dirname, '..', '..', '.github', 'assets', 'tools-icon', 'senpi.png')));
+});
+
 test('Unsloth has a label and uses the standard mask-safe icon path', () => {
   const styles = rendererStyles();
   assert.ok(clientLabelIds().has('unsloth'));

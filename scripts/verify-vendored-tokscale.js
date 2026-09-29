@@ -46,6 +46,7 @@ const FIXTURE_LINES = [
 const EXPECTED = { client: FIXTURE_CLIENT, model: 'deepseek-reasoner', input: 2885, output: 2, reasoning: 23, cacheRead: 0 };
 const MUSE_SESSION_ID = 'b1111111-2222-4333-8444-555555555555';
 const MUSE_MODEL = 'muse-spark-1.3-contributor';
+const SENPI_SESSION_ID = '019fae75-f35c-7b20-8d6f-e6dea8f7d9f5';
 // Every Tokscale-parsed client added after the legacy baseline in
 // tests/shared/tokscaleTokenContracts.test.js needs a case here. That test
 // makes a new catalog id fail locally until its real binary output and Token
@@ -88,6 +89,27 @@ const TOKEN_CONTRACT_CASES = Object.freeze([
           }
         }
       })}\n`);
+    }
+  },
+  {
+    client: 'senpi',
+    // pi-mono v3 transcript: usage.reasoning (16) is a subset of output, and
+    // Tokscale reports it as 0 rather than as a separate bucket — the
+    // normalized total comes purely from the additive components.
+    expectedRow: { model: 'claude-opus-5', input: 2, output: 49, cacheRead: 40625, cacheWrite: 332, reasoning: 0 },
+    hasExplicitTotal: false,
+    expectedPeriod: { totalTokens: 41008, clientTokens: 41008, clientOutputTokens: 49 },
+    expectedSession: { id: SENPI_SESSION_ID, totalTokens: 41008, outputTokens: 49, reasoningTokens: 0 },
+    writeFixture(home) {
+      const sessionDir = path.join(home, '.senpi', 'agent', 'sessions', '-tmp-senpi-workspace');
+      fs.mkdirSync(sessionDir, { recursive: true });
+      const lines = [
+        `{"type":"session","version":3,"id":"${SENPI_SESSION_ID}","timestamp":"2026-09-28T15:19:53.436Z","cwd":"/tmp/senpi-workspace"}`,
+        '{"type":"session_info","id":"si1","parentId":null,"timestamp":"2026-09-28T15:19:54.000Z","name":"Refactor auth flow"}',
+        '{"type":"model_change","id":"a1","parentId":null,"timestamp":"2026-09-28T15:19:53.500Z","provider":"anthropic","modelId":"claude-opus-5"}',
+        '{"type":"message","id":"b2","parentId":"a1","timestamp":"2026-09-28T15:20:01.000Z","message":{"role":"assistant","model":"claude-opus-5","provider":"anthropic","api":"anthropic-messages","responseId":"resp_1","stopReason":"stop","usage":{"input":2,"output":49,"cacheRead":40625,"cacheWrite":332,"totalTokens":41008,"cacheWrite1h":0,"reasoning":16,"cost":{"input":0.00001,"output":0.001225,"cacheRead":0.0203125,"cacheWrite":0.002075,"total":0.0236225}}}}'
+      ];
+      fs.writeFileSync(path.join(sessionDir, 'session_abc.jsonl'), `${lines.join('\n')}\n`);
     }
   }
 ]);
@@ -168,7 +190,7 @@ function hermeticEnv(home) {
   // Scan-path overrides that must not leak in from the runner/dev shell —
   // DSH_HOME in particular would otherwise redirect the scan away from the
   // fixture entirely, since DSH resolves it ahead of `~/.dsh`.
-  for (const key of ['NO_PROXY', 'no_proxy', 'TOKSCALE_EXTRA_DIRS', 'DSH_HOME']) {
+  for (const key of ['NO_PROXY', 'no_proxy', 'TOKSCALE_EXTRA_DIRS', 'DSH_HOME', 'SENPI_CODING_AGENT_DIR', 'SENPI_CODING_AGENT_SESSION_DIR']) {
     delete env[key];
   }
   return env;

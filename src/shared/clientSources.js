@@ -271,6 +271,20 @@ function clientSourceRoots(clientsCsv, options = {}) {
   // rather than inventing an env override the scan does not honor.
   add('pi', ...simpleHostSourceRoots('pi', home));
   add('omp', ...simpleHostSourceRoots('omp', home));
+  // Senpi (OmO Native) is a pi-mono descendant: its agent dir honors
+  // SENPI_CODING_AGENT_DIR with a ~/.senpi/agent fallback, and the scanner
+  // additionally reads OmO task children — SENPI_CODING_AGENT_SESSION_DIR,
+  // the current project's .omo/senpi-task/children, and the home default.
+  // Per-project children dirs are discovered from session headers at scan
+  // time, so only the fixed roots are watchable here.
+  const senpiAgentDir = nonBlankEnvPath('SENPI_CODING_AGENT_DIR', path.join(home, '.senpi', 'agent'), env);
+  const senpiSessionDir = nonBlankEnvPath('SENPI_CODING_AGENT_SESSION_DIR', null, env);
+  add(
+    'senpi',
+    ['senpi-sessions', path.join(senpiAgentDir, 'sessions')],
+    ...(senpiSessionDir ? [['senpi-sessions', senpiSessionDir]] : []),
+    ...simpleHostSourceRoots('senpi', home)
+  );
   // Zed: tokscale reads the XdgData root on every platform AND the native macOS
   // (Application Support) / Windows (LOCALAPPDATA) roots (see tokscale scanner.rs
   // cfg(macos)/cfg(windows) blocks) — watch all three so native mac/win users get

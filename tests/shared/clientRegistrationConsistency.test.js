@@ -60,7 +60,7 @@ test('source markers declare each WSL path once and preserve discovery order', (
   assert.deepEqual(WSL_DATA_MARKERS, SOURCE_MARKERS.map(({ marker }) => marker));
   assert.deepEqual(Object.entries(MARKER_CLIENTS), SOURCE_MARKERS.map(({ marker, client }) => [marker, client]));
   assert.deepEqual(SOURCE_MARKERS.filter(({ hostCheckId }) => hostCheckId).map(({ client }) => client), [
-    'qwen', 'pi', 'omp', 'commandcode', 'droid'
+    'qwen', 'pi', 'omp', 'senpi', 'commandcode', 'droid'
   ]);
   assert.deepEqual(WSL_DATA_MARKERS, [
     '.claude/projects', '.claude/transcripts', '.codex/sessions', '.local/share/opencode',
@@ -71,6 +71,7 @@ test('source markers declare each WSL path once and preserve discovery order', (
     '.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks',
     '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/tasks',
     '.local/share/amp/threads', '.pi/agent/sessions', '.omp/agent/sessions',
+    '.senpi/agent/sessions', '.omo/senpi-task/children',
     '.local/share/zed/threads/threads.db', '.local/share/kilo/kilo.db',
     '.config/Code/User/globalStorage/kilocode.kilo-code/tasks',
     '.vscode-server/data/User/globalStorage/kilocode.kilo-code/tasks',

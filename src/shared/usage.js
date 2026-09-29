@@ -243,6 +243,9 @@ function normalizeClientName(value) {
   // id `omp`; these spellings only appear when a caller passes a display name.
   if (raw === 'omp' || /^oh[\s_-]*my[\s_-]*pi$/.test(raw)) return 'omp';
   if (/\bpi\b/.test(raw)) return 'pi';
+  // Senpi (OmO Native) is a pi-mono descendant; Tokscale reports the id
+  // `senpi`, so the display name normalizes the same way.
+  if (raw.includes('senpi')) return 'senpi';
   if (raw.includes('zed')) return 'zed';
   if (/^kilo[\s_-]*code$/.test(raw)) return 'kilo';
   if (/command[\s_-]*code/.test(raw)) return 'commandcode';

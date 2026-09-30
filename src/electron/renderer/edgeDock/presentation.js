@@ -76,9 +76,16 @@
       : null;
   }
 
-  function accountSummary(provider) {
+  function accountSummary(provider, options = {}) {
+    const windowKey = options.windowKey || '';
     const selection = trayText.compactLimitSelection(provider);
-    const headline = headlinePick(selection);
+    const chosenWindow = windowKey && provider?.status === 'ok' && !provider?.stale
+      ? dockItems.selectedLimitWindow(provider, windowKey, options)
+      : null;
+    const headline = windowKey
+      ? (chosenWindow && trayText.remainingPercent(chosenWindow, provider) !== null
+        ? { window: chosenWindow, remaining: trayText.remainingPercent(chosenWindow, provider) } : null)
+      : headlinePick(selection);
     return {
       status: provider?.status === 'ok' && !provider?.stale ? 'ok' : (provider?.stale ? 'stale' : 'error'),
       planLabel: String(provider?.planLabel || provider?.accountLabel || ''),
@@ -89,10 +96,9 @@
       stale: provider?.stale === true,
       headlineRemaining: headline ? headline.remaining : null,
       headlineWindow: headline ? headline.window : null,
-      // Severity is the tightest metered pool, not the headline: with the
-      // warn-colours toggle on, an account whose weekly runs out while its
-      // session still reads 100% flags before the number flips to 0%.
-      severityPercent: selection ? selection.tightestPercent : null,
+      // Automatic mode warns for the tightest metered pool. A pinned window
+      // keeps both the number and its colour tied to that chosen pool.
+      severityPercent: windowKey ? (headline?.remaining ?? null) : (selection ? selection.tightestPercent : null),
       // The card renders its quota rows from the shared Limits view, which
       // reads the collector record itself. Projecting the windows here is what
       // made the card a second, less-informed implementation of the same rows:
@@ -326,7 +332,7 @@
     const hidden = new Set(options.hiddenAccounts || []);
     const accounts = records
       .filter((record) => !record?.accountKey || !hidden.has(record.accountKey))
-      .map((record) => ({ record, summary: accountSummary(record) }));
+      .map((record) => ({ record, summary: accountSummary(record, options) }));
     // Accounts keep the collector's order, as the Limits view lists them. The
     // live Codex account is taken from this device's records alone, so a synced
     // device's login is never marked as the one in use here.
@@ -605,6 +611,7 @@
         // every time an account refreshes or signs out.
         cells.push(providerCell(item.provider, byId.get(item.provider) || [], {
           ...item,
+          showCodexAdditionalLimits: options.showCodexAdditionalLimits,
           subscriptionAccounts: allById.get(item.provider) || [],
           stats,
           localDeviceId: options.localDeviceId,

@@ -91,6 +91,7 @@ const supportedToolOrder = [
   'Ollama',
   'Trae CN',
   'Alibaba Cloud',
+  'StepFun',
   'Third-party APIs'
 ];
 
@@ -135,6 +136,7 @@ const supportedToolIdOrder = [
   'ollama',
   'trae',
   'alibaba',
+  'stepfun',
   'thirdparty'
 ];
 

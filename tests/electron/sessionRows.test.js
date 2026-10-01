@@ -12,6 +12,7 @@ const {
   handleBreakdownRowKeydown,
   sessionBreakdownIncomplete,
   sessionIdLabel,
+  sessionModelTooltipEntries,
   sessionRowsForPeriod
 } = require('../../src/electron/renderer/sessionRows');
 
@@ -116,6 +117,123 @@ test('session rows group client and model apart from activity metadata', () => {
   assert.equal(row.detail, 'titled');
 });
 
+test('multi-model sessions expose every model with its tokens and share of the session', () => {
+  const session = {
+    totalTokens: 100,
+    models: { 'gpt-5.6-sol': 70, 'claude-opus-5': 20 }
+  };
+  assert.deepEqual(sessionModelTooltipEntries(session), [
+    ['gpt-5.6-sol', '70', '70%'],
+    ['claude-opus-5', '20', '20%'],
+    ['Unclassified', '10', '10%']
+  ]);
+  assert.deepEqual(sessionModelTooltipEntries(session, { unattributedLabel: '未分類' }).at(-1), [
+    '未分類', '10', '10%'
+  ]);
+  // The rows follow the heaviest model first, not the models map's order,
+  // with the tokens no model claimed trailing them.
+  assert.deepEqual(
+    sessionModelTooltipEntries({ totalTokens: 100, models: { 'claude-opus-5': 20, 'gpt-5.6-sol': 70 } })
+      .map(([model]) => model),
+    ['gpt-5.6-sol', 'claude-opus-5', 'Unclassified']
+  );
+});
+
+test('model tooltip shares read the session total and floor at a real sliver', () => {
+  // Models can out-sum the recorded total (overlapping reads); the share is
+  // then of the attributed tokens rather than over 100% each.
+  assert.deepEqual(sessionModelTooltipEntries({ totalTokens: 30, models: { a: 30, b: 10 } }), [
+    ['a', '30', '75%'],
+    ['b', '10', '25%']
+  ]);
+  assert.deepEqual(sessionModelTooltipEntries({ totalTokens: 1000, models: { a: 999, b: 1 } }), [
+    ['a', '999', '100%'],
+    ['b', '1', '<1%']
+  ]);
+  // Fewer than two models never abbreviates to "N models", so there is no
+  // tooltip behind a label that names the model already.
+  assert.deepEqual(sessionModelTooltipEntries({ totalTokens: 10, models: { a: 10 } }), []);
+  assert.deepEqual(sessionModelTooltipEntries({ totalTokens: 10, models: { a: 10, b: 0 } }), []);
+  assert.deepEqual(sessionModelTooltipEntries(null), []);
+});
+
+test('session rows carry the model tooltip entries behind the "N models" label', () => {
+  const [row] = sessionRowsForPeriod({ sessions: {
+    'codex:mixed': {
+      client: 'codex',
+      sessionId: 'mixed',
+      title: 'Mixed run',
+      totalTokens: 100,
+      models: { 'gpt-5.6-sol': 60, 'gpt-5.6': 40 },
+      lastUsedAt: localIso(2026, 5, 30, 12, 7)
+    }
+  } }, {
+    clientLabels,
+    clientColors,
+    now: new Date(2026, 4, 30, 12, 30),
+    unattributedLabel: 'Unclassified'
+  });
+  assert.equal(row.modelLabel, '2 models');
+  assert.equal(row.subtitle, 'Codex · 2 models');
+  assert.deepEqual(row.modelTooltipEntries, [
+    ['gpt-5.6-sol', '60', '60%'],
+    ['gpt-5.6', '40', '40%']
+  ]);
+});
+
+test('a hovered background-review run tooltip holds the session repaint', () => {
+  // The periodic rebuild of an open review detail replaces every run node;
+  // sessionTooltipShouldHoldRender is what keeps a tooltip open through it.
+  // The guard's selector must cover the run title, which carries the wrap
+  // class itself — matching only the Sessions list's containers would leave
+  // this surface unprotected.
+  const source = fs.readFileSync(path.join(__dirname, '../../src/electron/renderer/app.js'), 'utf8');
+  const body = source.slice(
+    source.indexOf('function sessionTooltipShouldHoldRender('),
+    source.indexOf('function flushPendingLimitDetailTooltipRender(')
+  );
+  const matchesPart = (part, el) => {
+    const compounds = part.trim().split(/\s+/);
+    const [cls, ...pseudos] = compounds.at(-1).split(':');
+    if (!cls.split('.').filter(Boolean).every((c) => el.classes.includes(c))) return false;
+    if (pseudos.includes('hover') && !el.hovered) return false;
+    if (pseudos.includes('focus-within') && !el.focusWithin) return false;
+    let anc = el.parent;
+    for (let i = compounds.length - 2; i >= 0; i -= 1) {
+      const required = compounds[i].split('.').filter(Boolean);
+      while (anc && !required.every((c) => anc.classes.includes(c))) anc = anc.parent;
+      if (!anc) return false;
+      anc = anc.parent;
+    }
+    return true;
+  };
+  const document = {
+    element: null,
+    querySelector(selector) {
+      return this.element && selector.split(',').some((part) => matchesPart(part, this.element))
+        ? this.element
+        : null;
+    }
+  };
+  const shouldHold = Function('document', `${body}\nreturn sessionTooltipShouldHoldRender;`)(document);
+
+  for (const flag of ['hovered', 'focusWithin']) {
+    document.element = { classes: ['detail-ex-title', 'limit-detail-tooltip-wrap'], [flag]: true, parent: null };
+    assert.equal(shouldHold(), true);
+  }
+  document.element = { classes: ['detail-ex-title', 'limit-detail-tooltip-wrap'], parent: null };
+  assert.equal(shouldHold(), false);
+});
+
+test('the periodic review-detail rebuild defers to the tooltip hold', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../src/electron/renderer/app.js'), 'utf8');
+  const branch = source.slice(
+    source.indexOf("state.openSession.kind === 'background-review-group'"),
+    source.indexOf('state.openSession.renderOptions')
+  );
+  assert.match(branch, /!sessionTooltipShouldHoldRender\(\)/);
+});
+
 test('Codex merged rollout labels contain UUIDs only', () => {
   const first = '01a084ff-20ff-7563-beb4-045b31e5a47a';
   const second = '01a0876b-d178-7be2-a485-529a745ea1b0';
@@ -189,9 +307,9 @@ test('background review run headings show the model independently of session tit
       addEventListener(type, handler) { this.events[type] = handler; }
     };
   };
-  const render = Function('document', 'sessionRowsApi', 't', 'formatNumber', 'formatCost', 'applyBarScale', 'rowWidth', 'openSessionDetail', 'bindHoverMarquee', `${body}\nreturn backgroundReviewRunNode;`)(
+  const render = Function('document', 'sessionRowsApi', 't', 'formatNumber', 'formatCost', 'applyBarScale', 'rowWidth', 'openSessionDetail', 'bindHoverMarquee', 'limitWindowsView', `${body}\nreturn backgroundReviewRunNode;`)(
     { createElement: createNode }, sessionRowsApi, () => 'Codex Auto Review', String, String, () => {}, () => 100,
-    (request) => { opened = request; }, () => {}
+    (request) => { opened = request; }, () => {}, { setDetailTooltip() {} }
   );
   for (const [models, expectedModel] of [
     [{ 'gpt-5.6-sol': 30 }, 'gpt-5.6-sol'],

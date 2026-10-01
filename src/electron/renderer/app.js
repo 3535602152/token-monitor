@@ -4679,6 +4679,15 @@ function renderSessionDetail({ detail, loading, error } = {}) {
   back.addEventListener('click', sessionDetailBack);
   head.append(back);
 
+  if (state.openSession?.title) {
+    const heading = document.createElement('strong');
+    heading.className = 'detail-heading';
+    heading.textContent = state.openSession.title;
+    heading.title = state.openSession.title;
+    bindHoverMarquee(heading);
+    head.append(heading);
+  }
+
   if (loading) { container.append(detailNote(t('detailLoading') || 'Loading…')); return; }
   if (error || (detail && detail.found === false)) { container.append(detailNote(t('detailNotFound') || 'Transcript not found on this machine.')); return; }
 
@@ -4708,7 +4717,10 @@ function backgroundReviewRunNode(row, max, parent) {
     + '<div class="detail-ex-metrics"><span class="detail-ex-value"></span><span class="detail-ex-cost"></span></div></div>'
     + '<div class="bar"><div class="bar-fill"></div></div>';
   const time = sessionRowsApi.compactSessionTime(row.sortTime, new Date());
-  wrap.querySelector('.detail-ex-title').textContent = time || t('sessions.backgroundReviews');
+  const title = [row.modelLabel, time].filter(Boolean).join(' · ') || t('sessions.backgroundReviews');
+  const titleEl = wrap.querySelector('.detail-ex-title');
+  titleEl.textContent = title;
+  titleEl.title = title;
   wrap.querySelector('.detail-ex-sub').textContent = row.detail || '';
   wrap.querySelector('.detail-ex-value').textContent = formatNumber(row.value);
   wrap.querySelector('.detail-ex-cost').textContent = formatCost(row.cost || 0);
@@ -4717,7 +4729,7 @@ function backgroundReviewRunNode(row, max, parent) {
     client: row.client,
     sessionId: String(row.key || '').replace(/^session:[^:]+:/, ''),
     sessionCost: Number(row.cost || 0),
-    title: `${t('sessions.backgroundReviews')} · ${time}`,
+    title,
     returnTo: parent
   });
   wrap.addEventListener('click', open);

@@ -1995,6 +1995,8 @@ function rowTemplate(rowData) {
   row.querySelector('.row-activity').textContent = activity || '';
   row.querySelector('.row-detail').textContent = detail || '';
   bindHoverMarquee(row.querySelector('.row-title'));
+  bindHoverMarquee(row.querySelector('.row-subtitle'));
+  bindHoverMarquee(row.querySelector('.row-activity'));
   bindHoverMarquee(row.querySelector('.row-detail'));
   return row;
 }
@@ -2413,10 +2415,13 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
     const models = document.createElement('span');
     models.className = 'session-models';
     models.textContent = modelLabel;
-    subtitleEl.replaceChildren(document.createTextNode(subtitle.slice(0, -modelLabel.length)), models);
+    // Inside the marquee's own wrapper, so a long line still scrolls on hover.
+    const subtitleContent = subtitleEl.querySelector('.overflow-text-content') || subtitleEl;
+    subtitleContent.replaceChildren(document.createTextNode(subtitle.slice(0, -modelLabel.length)), models);
+    overflowText.update(subtitleEl);
     limitWindowsView.setDetailTooltip(models, modelEntries);
   } else {
-    subtitleEl.textContent = subtitle || '';
+    setHoverMarqueeText(subtitleEl, subtitle);
   }
   if (!subtitleShowsModel && modelEntries && modelLabel && String(name || '').endsWith(modelLabel)) {
     limitWindowsView.setDetailTooltip(titleEl, modelEntries);
@@ -2424,12 +2429,17 @@ function updateRow(row, { name, subtitle, activity, detail, value, cost, barValu
     limitWindowsView.setDetailTooltip(titleEl, null);
   }
   subtitleEl.classList.toggle('hidden', !subtitle);
+  // The activity line carries time, calls, cache hit and tok/s; a narrow window
+  // fades and scrolls it on hover the way the title does rather than wrapping.
   const activityEl = row.querySelector('.row-activity');
-  activityEl.textContent = activity || '';
+  setHoverMarqueeText(activityEl, activity);
   activityEl.classList.toggle('hidden', !activity);
+  // Move the id into Session Details only when the row can open them; clients
+  // without a detail reader still need their id here to distinguish sessions.
+  const shownDetail = kind === 'session' && interactive ? '' : detail;
   const detailEl = row.querySelector('.row-detail');
-  setHoverMarqueeText(detailEl, detail);
-  detailEl.classList.toggle('hidden', !detail);
+  setHoverMarqueeText(detailEl, shownDetail);
+  detailEl.classList.toggle('hidden', !shownDetail);
   const valueEl = row.querySelector('.row-value');
   if (tokenDataUnavailable === true) {
     row.dataset.tokenDataUnavailable = 'true';
@@ -4692,6 +4702,9 @@ function renderSessionDetail({ detail, loading, error } = {}) {
     back.append(arrow, heading);
   }
 
+  const idLabel = sessionRowsApi.sessionDetailIdLabel(state.openSession?.client, state.openSession?.sessionId, detail);
+  if (idLabel) container.append(sessionIdLine(idLabel));
+
   if (loading) { container.append(detailNote(t('detailLoading') || 'Loading…')); return; }
   if (error || (detail && detail.found === false)) { container.append(detailNote(t('detailNotFound') || 'Transcript not found on this machine.')); return; }
 
@@ -4709,6 +4722,25 @@ function renderSessionDetail({ detail, loading, error } = {}) {
 
   const max = Math.max(1, ...rows.map((row) => row.value));
   for (const row of rows) container.append(exchangeNode(row, max));
+}
+
+// Copy the conversation identity, not a multi-UUID rollout filename.
+function sessionIdLine(idLabel) {
+  const line = document.createElement('div');
+  line.className = 'detail-session-id';
+  const text = document.createElement('span');
+  text.className = 'detail-session-id-text';
+  text.textContent = idLabel;
+  text.title = idLabel;
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'detail-session-id-copy';
+  copy.textContent = '⧉';
+  copy.title = t('session.copyId');
+  copy.setAttribute('aria-label', t('session.copyId'));
+  copy.addEventListener('click', () => copyToClipboard(idLabel, copy));
+  line.append(text, copy);
+  return line;
 }
 
 function backgroundReviewRunNode(row, max, parent) {

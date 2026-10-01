@@ -68,22 +68,34 @@
       : `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())} ${time}`;
   }
 
-  function sessionIdLabel(id) {
+  function sessionIds(id) {
     const raw = String(id || '').trim();
-    if (!raw) return '';
+    if (!raw) return [];
     const reasonixPrefix = raw.match(/^reasonix:/i);
     const reasonixLabel = reasonixPrefix ? raw.slice(reasonixPrefix[0].length) : raw;
-    if (reasonixLabel.toLowerCase().startsWith('reasonix-stats:')) return '';
-    if (reasonixPrefix) return reasonixLabel;
-    if (raw.toLowerCase().startsWith('reasonix-stats:')) return '';
+    if (reasonixLabel.toLowerCase().startsWith('reasonix-stats:')) return [];
+    if (reasonixPrefix) return [reasonixLabel];
+    if (raw.toLowerCase().startsWith('reasonix-stats:')) return [];
     const uuids = raw.match(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/gi) || [];
-    // Tokscale can merge resumed Codex rollouts into one session key. Keep that
-    // identity useful without exposing the rollout timestamps or join syntax.
-    if (uuids.length > 1) return uuids.join(' · ');
+    // Rollout filenames can contain multiple UUIDs. These are display labels,
+    // not proof that each UUID is a conversation identity.
+    if (uuids.length > 1) return uuids;
     const rollout = raw.match(/^rollout-\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}[:-]\d{2}-(.+)$/);
-    if (rollout) return uuids[0] || rollout[1];
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}/.test(raw)) return '';
-    return raw;
+    if (rollout) return [uuids[0] || rollout[1]];
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}/.test(raw)) return [];
+    return [raw];
+  }
+
+  function sessionIdLabel(id) {
+    return sessionIds(id).join(' · ');
+  }
+
+  function sessionDetailIdLabel(client, id, detail) {
+    if (client !== 'codex') return sessionIdLabel(id);
+    const canonical = detail?.found === true ? detail.canonicalSessionId : '';
+    if (typeof canonical === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(canonical)) return canonical;
+    const candidates = sessionIds(id);
+    return candidates.length === 1 ? candidates[0] : '';
   }
 
   function sessionModelLabel(session) {
@@ -207,6 +219,45 @@
     return `${formatNumber(count)} ${count === 1 ? 'call' : 'calls'}`;
   }
 
+  // The session's own generation speed: the footer's tok/s ratio over just
+  // this session's timed entries. A client that reports no durations leaves
+  // both counters at 0 and the row without a reading.
+  function sessionTokenRate(session) {
+    const durationMs = finiteNumber(session?.timedDurationMs);
+    const output = Math.min(
+      Math.max(0, finiteNumber(session?.outputTokens)),
+      Math.max(0, finiteNumber(session?.timedOutputTokens))
+    );
+    return durationMs > 0 && output > 0 ? output * 1000 / durationMs : 0;
+  }
+
+  // Not localized, like the footer's rate and `calls`: tok/s is a unit.
+  function tokenRateLabel(session) {
+    const rate = Math.round(sessionTokenRate(session));
+    return rate > 0 ? `${formatNumber(rate)} tok/s` : '';
+  }
+
+  // Share of the session's input the provider served from cache - the same
+  // split the Tool detail prints as "Input (Cache Hit)". A session with no
+  // cache traffic either way says nothing about caching (several clients never
+  // report it), so it gets no reading rather than a 0% that reads as a miss.
+  function sessionCacheHitPercent(session) {
+    const cacheRead = Math.max(0, finiteNumber(session?.cacheReadTokens));
+    const cacheWrite = Math.max(0, finiteNumber(session?.cacheWriteTokens));
+    if (cacheRead <= 0 && cacheWrite <= 0) return null;
+    const input = Math.max(0, finiteNumber(session?.inputTokens)) + cacheRead + cacheWrite;
+    return cacheRead / input * 100;
+  }
+
+  // A bare percentage: the line has no room for a label in a narrow window, and
+  // an icon would either look like a clock beside the time or borrow the
+  // footer's ⚡, which already means speed.
+  function cacheHitLabel(session) {
+    const percent = sessionCacheHitPercent(session);
+    if (percent === null) return '';
+    return percent > 0 && percent < 1 ? '<1%' : `${Math.round(Math.min(100, percent))}%`;
+  }
+
   function isBackgroundReviewSession(session) {
     return textValue(session?.sessionKind) === 'background-review';
   }
@@ -231,9 +282,22 @@
       'Reasonix',
       session?.model
     );
+    // Native Reasonix prompt totals include cache hits; explicit misses win,
+    // matching the detail reader's split without counting those hits twice.
+    const cacheRead = Math.max(0, finiteNumber(session?.cacheHitTokens));
+    const cacheInput = session?.cacheMissTokens ?? Math.max(0, finiteNumber(session?.promptTokens) - cacheRead);
+    // Positive explicit misses prove a cold-cache reading; prompt-only or
+    // all-zero counters do not prove that cache telemetry is available.
+    const cacheLabel = cacheHitLabel({
+      inputTokens: cacheInput,
+      cacheReadTokens: cacheRead,
+      cacheWriteTokens: session?.cacheWriteTokens
+    }) || (finiteNumber(session?.cacheMissTokens) > 0 ? '0%' : '');
     const subtitleParts = [
       sessionActivityLabel(session, now),
-      messageLabel(session)
+      messageLabel(session),
+      tokenDataUnavailable ? '' : cacheLabel,
+      tokenRateLabel(session)
     ].filter(Boolean);
     // One derivation, not two: the boolean is a projection of the three-state
     // value, so a row can never be marked running by one reading and idle by the
@@ -299,7 +363,9 @@
         const activityParts = [
           archived ? archivedLabel : '',
           sessionActivityLabel(session, now),
-          messageLabel(session)
+          messageLabel(session),
+          cacheHitLabel(session),
+          tokenRateLabel(session)
         ].filter(Boolean);
         return {
           key: `session:${key}`,
@@ -405,12 +471,15 @@
     groupBackgroundReviewRows,
     handleBreakdownRowKeydown,
     sessionBreakdownIncomplete,
+    sessionCacheHitPercent,
     sessionIdLabel,
+    sessionDetailIdLabel,
     // Exported for the edge dock's session rows: a card that shows the top
     // model reads a different name than the list's "N models" for the same
     // session, so both surfaces compose the label from this one helper.
     sessionModelLabel,
     sessionModelTooltipEntries,
-    sessionRowsForPeriod
+    sessionRowsForPeriod,
+    sessionTokenRate
   };
 });

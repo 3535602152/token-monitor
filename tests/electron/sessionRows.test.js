@@ -12,6 +12,7 @@ const {
   handleBreakdownRowKeydown,
   sessionBreakdownIncomplete,
   sessionIdLabel,
+  sessionDetailIdLabel,
   sessionModelTooltipEntries,
   sessionRowsForPeriod
 } = require('../../src/electron/renderer/sessionRows');
@@ -115,6 +116,82 @@ test('session rows group client and model apart from activity metadata', () => {
   assert.equal(row.subtitle, 'Codex · gpt-5.6-sol');
   assert.equal(row.activity, '12:07 · 4 calls');
   assert.equal(row.detail, 'titled');
+});
+
+test('session activity ends with the share of input served from cache', () => {
+  const now = new Date(2026, 4, 30, 12, 30);
+  const session = (id, fields) => ({
+    client: 'codex',
+    sessionId: id,
+    title: id,
+    totalTokens: 1_000,
+    models: { 'gpt-5.6-sol': 1_000 },
+    messageCount: 4,
+    lastUsedAt: localIso(2026, 5, 30, 12, 7),
+    ...fields
+  });
+  const rows = sessionRowsForPeriod({ sessions: {
+    'codex:warm': session('warm', { inputTokens: 40, cacheReadTokens: 940, cacheWriteTokens: 20, outputTokens: 50 }),
+    'codex:sliver': session('sliver', { inputTokens: 995, cacheReadTokens: 5, outputTokens: 50 }),
+    // Writes with no reads is a real cold start, so it reads 0%.
+    'codex:cold': session('cold', { inputTokens: 500, cacheWriteTokens: 500, outputTokens: 50 }),
+    // No cache traffic at all says nothing about caching: no reading.
+    'codex:unreported': session('unreported', { inputTokens: 950, outputTokens: 50 })
+  } }, {
+    clientLabels,
+    clientColors,
+    now
+  });
+  const byName = Object.fromEntries(rows.map((row) => [row.name, row]));
+
+  assert.equal(byName.warm.activity, '12:07 · 4 calls · 94%');
+  assert.equal(byName.sliver.activity, '12:07 · 4 calls · <1%');
+  assert.equal(byName.cold.activity, '12:07 · 4 calls · 0%');
+  assert.equal(byName.unreported.activity, '12:07 · 4 calls');
+});
+
+test('session activity ends with the session own generation speed after its cache hit', () => {
+  const now = new Date(2026, 4, 30, 12, 30);
+  const base = {
+    client: 'codex',
+    totalTokens: 1_000,
+    models: { 'gpt-5.6-sol': 1_000 },
+    messageCount: 4,
+    lastUsedAt: localIso(2026, 5, 30, 12, 7),
+    inputTokens: 40,
+    cacheReadTokens: 940,
+    cacheWriteTokens: 20,
+    outputTokens: 50
+  };
+  const rows = sessionRowsForPeriod({ sessions: {
+    'codex:timed': { ...base, sessionId: 'timed', title: 'timed', outputTokens: 1_850, timedOutputTokens: 1_850, timedDurationMs: 20_000 },
+    // The client reported no durations: no reading rather than "0 tok/s".
+    'codex:untimed': { ...base, sessionId: 'untimed', title: 'untimed' },
+    // Untitled rows carry the same line as their subtitle.
+    'codex:untitled': { ...base, sessionId: 'untitled', outputTokens: 1_200, timedOutputTokens: 1_200, timedDurationMs: 1_000 }
+  } }, { clientLabels, clientColors, now });
+  const byId = Object.fromEntries(rows.map((row) => [row.detail, row]));
+
+  // Cache before speed: in a window too narrow for the line, the fade eats the
+  // `tok/s` unit rather than the percentage's digits.
+  assert.equal(byId.timed.activity, '12:07 · 4 calls · 94% · 93 tok/s');
+  assert.equal(byId.untimed.activity, '12:07 · 4 calls · 94%');
+  assert.equal(byId.untitled.subtitle, '12:07 · 4 calls · 94% · 1,200 tok/s');
+});
+
+test('session rows bound malformed generation speeds even without wire normalization', () => {
+  for (const [outputTokens, timedOutputTokens, timedDurationMs, expected] of [
+    [10, 1_000_000, 1000, '10 tok/s'],
+    [10, 6, 1000, '6 tok/s'],
+    [undefined, 1_000_000, 1000, ''],
+    [10, -1, 1000, ''],
+    [10, 10, 0, '']
+  ]) {
+    const [row] = sessionRowsForPeriod({ sessions: {
+      'codex:malformed': { client: 'codex', sessionId: 'malformed', totalTokens: 100, outputTokens, timedOutputTokens, timedDurationMs }
+    } });
+    assert.equal(row.subtitle, expected);
+  }
 });
 
 test('multi-model sessions expose every model with its tokens and share of the session', () => {
@@ -241,6 +318,35 @@ test('Codex merged rollout labels contain UUIDs only', () => {
     sessionIdLabel(`rollout-2026-09-10T02-33-00-${first}_rollout-2026-09-10T02-40-00-${second}`),
     `${first} · ${second}`
   );
+});
+
+test('detail identities use Codex metadata without guessing a UUID position', () => {
+  const first = '01a084ff-20ff-7563-beb4-045b31e5a47a';
+  const second = '01a0876b-d178-7be2-a485-529a745ea1b0';
+  for (const [raw, expected] of [
+    [`rollout-2026-09-10T02-33-00-${first}_rollout-2026-09-10T02-40-00-${second}`, [first, second]],
+    [`rollout-2026-09-10T02-33-00-${first}`, [first]],
+    [first, [first]],
+    ['ordinary · label', ['ordinary · label']],
+    ['reasonix:ABC123', ['ABC123']],
+    ['reasonix-stats:/private/stats/day.jsonl', []],
+    ['reasonix:reasonix-stats:/private/stats/day.jsonl', []],
+    ['2026-09-10T02-33-00', []],
+    ['', []],
+    [undefined, []]
+  ]) {
+    assert.equal(sessionIdLabel(raw), expected.join(' · '));
+    assert.equal(sessionDetailIdLabel('claude', raw), expected.join(' · '));
+    assert.equal(sessionDetailIdLabel('codex', raw), expected.length === 1 ? expected[0] : '');
+  }
+  const raw = `rollout-2026-09-10T02-33-00-${first}_${second}`;
+  for (const canonicalSessionId of [first, second]) {
+    assert.equal(sessionDetailIdLabel('codex', raw, { found: true, canonicalSessionId }), canonicalSessionId);
+  }
+  for (const detail of [undefined, { found: false, canonicalSessionId: first },
+    { found: true }, { found: true, canonicalSessionId: `${first} · ${second}` }]) {
+    assert.equal(sessionDetailIdLabel('codex', raw, detail), '');
+  }
 });
 
 test('background review sessions collapse into one interactive aggregate row with newest-run context', () => {
@@ -439,7 +545,7 @@ test('Reasonix native rows reuse the common session schema without a native acco
   assert.equal(row.kind, 'session');
   assert.equal(row.key, 'session:reasonix:ABC123');
   assert.equal(row.name, 'Reasonix · deepseek/deepseek-v4-flash');
-  assert.equal(row.subtitle, '14:10 · 2 calls');
+  assert.equal(row.subtitle, '14:10 · 2 calls · 20%');
   assert.equal(row.detail, 'ABC123');
   assert.equal(row.value, 15382);
   assert.equal(row.cost, 0.25);
@@ -471,6 +577,28 @@ test('Reasonix native rows reuse the common session schema without a native acco
   }
   assert.equal(ordinary.name, 'Codex · gpt-5.6-luna');
   assert.equal(ordinary.subtitle, '14:09 · 1 call');
+});
+
+test('Reasonix cache percentages use native hits and misses without double-counting prompt tokens', () => {
+  for (const [fields, expected] of [
+    [{ promptTokens: 1000, cacheHitTokens: 900, cacheMissTokens: 80, cacheWriteTokens: 20 }, '90%'],
+    [{ promptTokens: 1000, cacheHitTokens: 900 }, '90%'],
+    [{ promptTokens: 1000, cacheHitTokens: 900, cacheMissTokens: 0 }, '100%'],
+    [{ promptTokens: 1000, cacheHitTokens: 0, cacheMissTokens: 500, cacheWriteTokens: 500 }, '0%'],
+    [{ promptTokens: 1000, cacheHitTokens: 5, cacheMissTokens: 995 }, '<1%'],
+    [{ promptTokens: 1000, cacheHitTokens: 0, cacheMissTokens: 1000, cacheWriteTokens: 0 }, '0%'],
+    [{ promptTokens: 1000, cacheHitTokens: 0, cacheMissTokens: 0, cacheWriteTokens: 0 }, ''],
+    [{ promptTokens: 1000 }, ''],
+    [{ cacheHitTokens: 0, cacheMissTokens: 0, cacheWriteTokens: 0 }, ''],
+    [{ tokenDataUnavailable: true, cacheHitTokens: 0, cacheMissTokens: 1000 }, ''],
+    [{ tokenDataUnavailable: true, cacheHitTokens: 900, cacheMissTokens: 100 }, '']
+  ]) {
+    const [row] = sessionRowsForPeriod({ sessions: {} }, { nativeSessions: {
+      'reasonix:cache': { client: 'reasonix', sessionId: 'reasonix:cache', totalTokens: 1000, ...fields }
+    } });
+    assert.equal(row.subtitle, expected);
+    assert.equal(row.sessionDetailAvailable, false, 'cache data does not enable per-turn details');
+  }
 });
 
 test('Reasonix native rows omit turns from the compact subtitle when turns are unavailable', () => {
@@ -622,7 +750,10 @@ test('session layout keeps page chrome consistent and scrolls long labels on one
   assert.match(styles, /\.shell\.session-mode \.row-detail\s*\{[^}]*white-space:\s*nowrap;/s);
   assert.match(styles, /\.shell\.session-mode \.row-title\.is-hover-scrolling,/);
   assert.match(styles, /\.shell\.session-mode \.row-detail\.is-hover-scrolling\s*\{[^}]*text-overflow:\s*clip;/s);
-  assert.match(styles, /\.shell\.session-mode \.session-row \.row-metrics::after,[^{]+\{[^}]*position:\s*absolute;[^}]*bottom:\s*0;/s);
+  // A clickable row is marked by a hover wash keyed off its button role, not by
+  // a `›` that would collide with the third right-hand line.
+  assert.doesNotMatch(styles, /\.row-metrics::after/);
+  assert.match(styles, /\.shell\.session-mode \.row\[role="button"\]:hover::before,\s*\.shell\.session-mode \.row\[role="button"\]:focus-visible::before\s*\{[^}]*opacity:\s*1;/s);
   assert.match(renderer, /class="row-activity"/);
   assert.match(renderer, /function setHoverMarqueeText\([^]*?overflowText\.setText\(element, value\)/);
 });

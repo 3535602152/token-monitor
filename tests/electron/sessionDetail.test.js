@@ -61,6 +61,8 @@ test('session detail renders its heading before loading, errors and empty result
     sessionDetailBack() { state.backClicked = true; },
     detailNote: text => ({ textContent: text }),
     sessionDetailApi: { exchangeRows: detail => detail?.exchanges || [] },
+    sessionRowsApi: require('../../src/electron/renderer/sessionRows'),
+    copyToClipboard: (text) => { state.copied = text; },
     exchangeNode: row => ({ textContent: row.title }),
     prefersReducedMotion: () => reducedMotion,
     setTimeout: callback => { timers.push(callback); return timers.length; },
@@ -126,8 +128,43 @@ test('session detail renders its heading before loading, errors and empty result
     overflowText.update(heading);
     assert.equal(heading.classList.contains('has-overflow-fade'), false, 'fitting text stays opaque');
   }
+  // The id the Sessions list no longer prints opens the detail body, copyable,
+  // in every state the body can be in.
+  for (const options of [{ loading: true }, { error: true }, { detail: { exchanges: [{ title: 'Reply', value: 10 }] } }]) {
+    state.openSession = { client: 'codex', title: 'Review PR 906', sessionId: 'rollout-2026-09-18T11-44-50-019e76fc-dddd-eeee-ffff-222222222222' };
+    render(options);
+    const idLine = els.sessionDetail.children[0];
+    assert.equal(idLine.className, 'detail-session-id');
+    assert.equal(idLine.querySelector('.detail-session-id-text').textContent, '019e76fc-dddd-eeee-ffff-222222222222');
+    idLine.querySelector('.detail-session-id-copy').click();
+    assert.equal(state.copied, '019e76fc-dddd-eeee-ffff-222222222222');
+  }
+  const rolloutIds = ['01a084ff-20ff-7563-beb4-045b31e5a47a', '01a0876b-d178-7be2-a485-529a745ea1b0'];
+  state.openSession = {
+    client: 'codex', title: 'Multi-UUID Codex rollout',
+    sessionId: `rollout-2026-09-10T02-33-00-${rolloutIds[0]}_${rolloutIds[1]}`
+  };
+  for (const options of [{ loading: true }, { error: true }, { detail: { found: false } },
+    { detail: { found: true, exchanges: [] } }]) {
+    render(options);
+    assert.equal(els.sessionDetail.children.filter(node => node.className === 'detail-session-id').length, 0,
+      'no copyable identity is guessed before metadata is available');
+  }
+  for (const canonicalSessionId of rolloutIds) {
+    for (const exchanges of [[], [{ title: 'Reply', value: 10 }]]) {
+      render({ detail: { found: true, canonicalSessionId, exchanges } });
+      const idLines = els.sessionDetail.children.filter(node => node.className === 'detail-session-id');
+      assert.equal(idLines.length, 1);
+      assert.equal(idLines[0].querySelector('.detail-session-id-text').textContent, canonicalSessionId);
+      const copy = idLines[0].querySelector('.detail-session-id-copy');
+      assert.equal(copy.attributes['aria-label'], translate('en', 'session.copyId'));
+      copy.click();
+      assert.equal(state.copied, canonicalSessionId, 'copy metadata identity regardless of filename position');
+    }
+  }
   state.openSession = {};
   render({ loading: true });
+  assert.equal(els.sessionDetail.children[0].className, undefined, 'no id, no line');
   assert.equal(els.sessionDetailHead.querySelector('.detail-heading'), null);
   assert.equal(els.sessionDetailHead.children[0].textContent, '‹ sessions');
   assert.equal(els.sessionDetailHead.children[0].attributes['aria-label'], 'Back to sessions');

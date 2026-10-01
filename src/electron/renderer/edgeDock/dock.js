@@ -40,6 +40,9 @@ const { CLIENT_LABELS } = window.TokenMonitorClientCatalog;
 // at paint time rather than frozen at push time.
 const sessionLive = window.TokenMonitorSessionLive;
 const sessionRowsApi = window.TokenMonitorSessionRows;
+const overflowText = window.TokenMonitorOverflowText.create({
+  document, window, prefersReducedMotion
+});
 const SESSION_STATE_GLYPHS = sessionLive.sessionStateMarkup({
   spin: 'edge-dock-session-spin',
   check: 'edge-dock-session-check',
@@ -1177,7 +1180,10 @@ function sessionsContainer(sessions, options = {}) {
     // made the row read as a different kind of row, and the colour carried no
     // more information than the dot does.
     nameNode.append(stateMark(session, key, state));
-    nameNode.append(document.createTextNode(name));
+    const title = el('span', 'edge-dock-session-title', name);
+    title.dataset.overflowKey = key;
+    overflowText.bind(title);
+    nameNode.append(title);
     // The glyph is decorative and its `title` only reaches pointer users, so the
     // translated state is rendered as real text for assistive technology. It
     // cannot go on the row itself: a plain `div` has the generic role and
@@ -1480,8 +1486,11 @@ function commitCard(card, cellId) {
   const scrollTop = sameCard ? previous.querySelector(CARD_SCROLL_SELECTOR)?.scrollTop || 0 : 0;
   const resetSnapshot = cardResetAnimator.capture(contentLayer);
   contentLayer.replaceChildren(card);
+  overflowText.refresh();
   const list = card.querySelector(CARD_SCROLL_SELECTOR);
   if (list) list.scrollTop = scrollTop;
+  // Measure reading targets only after mounting and restoring their scroll position.
+  if (sameCard) overflowText.preserveReading(previous, card);
   cardResetAnimator.animate(card, resetSnapshot);
 }
 

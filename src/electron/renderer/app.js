@@ -2035,51 +2035,18 @@ document.addEventListener('pointerdown', (event) => {
   }
 });
 
-const hoverMarqueeStates = new WeakMap();
+let homeSessionRenderPending = false;
+const overflowText = window.TokenMonitorOverflowText.create({
+  document, window, prefersReducedMotion,
+  enabled: element => Boolean(element.closest('.session-mode, .home-session-row')),
+  onLeave: () => requestAnimationFrame(() => {
+    if (homeSessionRenderPending && state.breakdown === 'home'
+      && visibleStatsSurface() === 'main' && state.stats) renderHome();
+  })
+});
 
-function stopHoverMarquee(element, { reset = true } = {}) {
-  const motion = hoverMarqueeStates.get(element);
-  if (motion?.delayId) clearTimeout(motion.delayId);
-  if (motion?.frameId) cancelAnimationFrame(motion.frameId);
-  hoverMarqueeStates.delete(element);
-  element.classList.remove('is-hover-scrolling');
-  if (reset) element.scrollLeft = 0;
-}
-
-function startHoverMarquee(element) {
-  stopHoverMarquee(element);
-  if (prefersReducedMotion() || !element.closest('.session-mode')) return;
-  const distance = Math.ceil(element.scrollWidth - element.clientWidth);
-  if (distance <= 1) return;
-
-  const motion = { delayId: 0, frameId: 0 };
-  hoverMarqueeStates.set(element, motion);
-  motion.delayId = setTimeout(() => {
-    motion.delayId = 0;
-    element.classList.add('is-hover-scrolling');
-    const startedAt = performance.now();
-    const duration = Math.max(1800, Math.min(8000, distance * 22));
-    const step = (now) => {
-      const progress = Math.min(1, (now - startedAt) / duration);
-      element.scrollLeft = distance * progress;
-      if (progress < 1) motion.frameId = requestAnimationFrame(step);
-      else motion.frameId = 0;
-    };
-    motion.frameId = requestAnimationFrame(step);
-  }, 240);
-}
-
-function bindHoverMarquee(element) {
-  element.addEventListener('mouseenter', () => startHoverMarquee(element));
-  element.addEventListener('mouseleave', () => stopHoverMarquee(element));
-}
-
-function setHoverMarqueeText(element, value) {
-  stopHoverMarquee(element);
-  const text = value || '';
-  element.textContent = text;
-  element.removeAttribute('title');
-}
+function bindHoverMarquee(element) { overflowText.bind(element); }
+function setHoverMarqueeText(element, value) { overflowText.setText(element, value); }
 
 function renderDeviceAccordion(accordionInner, deviceDetail) {
   const signature = JSON.stringify([
@@ -4006,7 +3973,7 @@ function limitDetailTooltipShouldHoldRender() {
 }
 
 function sessionTooltipShouldHoldRender() {
-  return Boolean(document.querySelector('.home-session-meta .limit-detail-tooltip-wrap:hover, .home-session-meta .limit-detail-tooltip-wrap:focus-within, .row-context.limit-detail-tooltip-wrap:hover, .row-context.limit-detail-tooltip-wrap:focus-within'));
+  return Boolean(document.querySelector('.home-session-row .is-hover-reading, .home-session-meta .limit-detail-tooltip-wrap:hover, .home-session-meta .limit-detail-tooltip-wrap:focus-within, .row-context.limit-detail-tooltip-wrap:hover, .row-context.limit-detail-tooltip-wrap:focus-within'));
 }
 
 function flushPendingLimitDetailTooltipRender() {
@@ -4674,18 +4641,30 @@ function renderSessionDetail({ detail, loading, error } = {}) {
   container.replaceChildren();
 
   const back = document.createElement('button');
-  back.className = 'detail-back';
-  back.textContent = `‹ ${t('sessions') || 'Sessions'}`;
+  const title = state.openSession?.title;
+  const backLabel = state.openSession?.returnTo?.kind === 'background-review-group'
+    ? t('sessions.backgroundReviews') : (t('sessions') || 'Sessions');
+  back.type = 'button';
+  back.className = title ? 'detail-back detail-back-titled' : 'detail-back';
+  if (!title) back.textContent = `‹ ${backLabel}`;
+  back.setAttribute('aria-label', title
+    ? t('sessions.backToWithTitle', { title, destination: backLabel })
+    : t('sessions.backTo', { destination: backLabel }));
+  if (!title) back.title = backLabel;
   back.addEventListener('click', sessionDetailBack);
   head.append(back);
 
-  if (state.openSession?.title) {
-    const heading = document.createElement('strong');
+  if (title) {
+    const arrow = document.createElement('span');
+    arrow.className = 'detail-back-arrow';
+    arrow.textContent = '‹';
+    arrow.setAttribute('aria-hidden', 'true');
+    const heading = document.createElement('span');
     heading.className = 'detail-heading';
-    heading.textContent = state.openSession.title;
-    heading.title = state.openSession.title;
+    heading.textContent = title;
+    heading.title = title;
     bindHoverMarquee(heading);
-    head.append(heading);
+    back.append(arrow, heading);
   }
 
   if (loading) { container.append(detailNote(t('detailLoading') || 'Loading…')); return; }
@@ -4721,6 +4700,7 @@ function backgroundReviewRunNode(row, max, parent) {
   const titleEl = wrap.querySelector('.detail-ex-title');
   titleEl.textContent = title;
   titleEl.title = title;
+  bindHoverMarquee(titleEl);
   wrap.querySelector('.detail-ex-sub').textContent = row.detail || '';
   wrap.querySelector('.detail-ex-value').textContent = formatNumber(row.value);
   wrap.querySelector('.detail-ex-cost').textContent = formatCost(row.cost || 0);
@@ -4751,13 +4731,22 @@ function renderBackgroundReviewDetail(request) {
   container.replaceChildren();
 
   const back = document.createElement('button');
-  back.className = 'detail-back';
-  back.textContent = `‹ ${t('sessions') || 'Sessions'}`;
+  back.type = 'button';
+  back.className = 'detail-back detail-back-titled';
+  back.setAttribute('aria-label', t('sessions.backToWithTitle', {
+    title: t('sessions.backgroundReviews'), destination: t('sessions') || 'Sessions'
+  }));
   back.addEventListener('click', closeSessionDetail);
-  const heading = document.createElement('strong');
+  const arrow = document.createElement('span');
+  arrow.className = 'detail-back-arrow';
+  arrow.textContent = '‹';
+  arrow.setAttribute('aria-hidden', 'true');
+  const heading = document.createElement('span');
   heading.className = 'detail-heading';
   heading.textContent = t('sessions.backgroundReviews');
-  head.append(back, heading);
+  bindHoverMarquee(heading);
+  back.append(arrow, heading);
+  head.append(back);
 
   const rows = request?.summary?.backgroundReviewRows || [];
   if (rows.length === 0) {
@@ -4801,6 +4790,7 @@ function exchangeNode(row, max) {
     exTitle.append(role, sep);
   }
   exTitle.append(document.createTextNode(row.title));
+  bindHoverMarquee(exTitle);
   wrap.querySelector('.detail-ex-sub').textContent = row.subtitle;
   const tokensAvailable = row.tokensAvailable !== false;
   wrap.querySelector('.detail-ex-value').textContent = tokensAvailable
@@ -5819,7 +5809,10 @@ function scheduleSessionStatusRepaint(period, incompleteHint = '') {
 
 function renderHomeSessionModule() {
   const current = els.homePanel?.querySelector('.home-module-session');
-  if (current && sessionTooltipShouldHoldRender()) return current;
+  if (current && sessionTooltipShouldHoldRender()) {
+    homeSessionRenderPending = true;
+    return current;
+  }
   const rows = window.TokenMonitorEdgeDockPresentation.recentSessionRows(state.stats, 5, { includeRunningBeyondCap: true });
   const runningCount = rows.filter((row) => window.TokenMonitorSessionLive.sessionActivityState(row) === 'running').length;
   const meta = runningCount > 0 ? t('home.runningSessions', { count: runningCount }) : '';
@@ -5851,6 +5844,7 @@ function renderHomeSessionModule() {
     const name = document.createElement('span');
     name.className = 'home-list-name';
     name.textContent = row.title || row.projectLabel || String(row.sessionId || '').slice(0, 12) || '—';
+    bindHoverMarquee(name);
     const value = document.createElement('span');
     value.className = 'home-list-value';
     value.textContent = formatCompact(row.totalTokens);
@@ -6336,7 +6330,11 @@ function renderHomeTrendsModule() {
 
 function renderHome() {
   if (!els.homePanel) return;
-  if (sessionTooltipShouldHoldRender()) return;
+  if (sessionTooltipShouldHoldRender()) {
+    homeSessionRenderPending = true;
+    return;
+  }
+  homeSessionRenderPending = false;
   // The previous scroller (and its ResizeObserver) is about to be replaced; drop the
   // observer so at most one is live. Keep the active tooltip visible while the
   // replacement heatmap reconnects it to the same date cell.

@@ -2442,3 +2442,36 @@ test('the handle retreats into the edge while the window can still show it', () 
   const dock = readRendererFile(path.join('edgeDock', 'dock.js'));
   assert.match(dock, /root\.classList\.toggle\('is-handle-hidden', payload\.peeking !== true\);/);
 });
+
+test('live rate card renders device model rows with vendor marks and retains every row', () => {
+  const devices = [{ id: 'a', name: 'MacBook', models: [{ model: 'gpt-6.1-sol', speed: 40, burn: 2400 }] }, { id: 'b', name: 'Desktop', models: Array.from({ length: 8 }, (_, i) => ({ model: `claude-${i}`, speed: i + 1, burn: 60 * (i + 1) })) }];
+  const [cell] = buildEdgeDockCells({}, { items: [{ type: 'stat', metric: 'liveRate' }], liveRate: { speed: 76, burn: 4560, idle: false, devices } });
+  assert.deepEqual(cell.rateDevices, devices);
+  const dock = readRendererFile(path.join('edgeDock', 'dock.js'));
+  const body = dock.slice(dock.indexOf('function appendLiveRateDetails('), dock.indexOf('function statCard('));
+  const node = (tag, className, text) => ({ tag, className, text, children: [], classes: new Set(), classList: { toggle(name, enabled) { if (enabled) this.owner.classes.add(name); else this.owner.classes.delete(name); } }, setAttribute() {}, append(...children) { this.children.push(...children); } });
+  const createNode = (...args) => { const result = node(...args); result.classList.owner = result; return result; };
+  const render = Function('window', 'el', 'formatRate', 'markNode', 'modelVendorFor', `return (${body})`)(
+    { TokenMonitorTokenRate: require('../../src/electron/renderer/tokenRatePresentation') }, createNode, String,
+    (vendor) => createNode('span', vendor), require('../../src/electron/renderer/usageCharts').modelVendorFor
+  );
+  const card = node('section', '');
+  render(card, cell);
+  const rows = card.children[0].children.filter((row) => row.className === 'edge-dock-rate-model');
+  assert.equal(rows.length, 9);
+  assert.equal(rows[0].children[0].className, 'codex');
+  assert.equal(rows[0].children[2].text, '40 tok/s');
+  assert.equal(rows[1].children[0].className, 'claude');
+  const headings = card.children[0].children.filter((row) => row.className === 'edge-dock-rate-device');
+  assert.deepEqual(headings.map((row) => row.text), ['MacBook', 'Desktop']);
+  assert.deepEqual(headings.map((row) => row.classes.has('is-separated')), [false, true]);
+  const single = node('section', '');
+  render(single, { rateDevices: [devices[0]] });
+  assert.equal(single.children[0].children.some((row) => row.className === 'edge-dock-rate-device'), false);
+  const mixed = node('section', '');
+  render(mixed, { rateDevices: [devices[0]], deviceCount: 2 });
+  assert.equal(mixed.children[0].children[0].text, 'MacBook');
+  const empty = node('section', '');
+  render(empty, { rateDevices: [] });
+  assert.equal(empty.children.length, 0);
+});

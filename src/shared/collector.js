@@ -4,7 +4,6 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const semver = require('semver');
 const { abortReason, throwIfAborted } = require('./abortSignal');
 const { readJson, sharedDataDir } = require('./config');
 const { appVersion } = require('./appVersion');
@@ -16,7 +15,7 @@ const {
   MAX_DIAGNOSTICS_PER_CLIENT,
   deriveClientOverall
 } = require('./clientHealth');
-const { tokscalePackageNameForPlatform, tokscalePlatformKey } = require('./tokscalePlatform');
+const { tokscalePackageNameForPlatform } = require('./tokscalePlatform');
 const { createTokscaleCapabilityResolver, filterSupportedClients, parseSupportedClients } = require('./tokscaleCapabilities');
 const { customPricingPath, tokscaleCacheDirs } = require('./tokscaleConfig');
 const { normalizeCustomScanPaths, customScanPathsFingerprint, tokscaleExtraDirsEnv } = require('./customScanPaths');
@@ -112,42 +111,30 @@ function locateBundledBinary() {
   return null;
 }
 
-function readDownloadedPointer() {
-  const currentPath = path.join(sharedDataDir(), 'tokscale', 'current.json');
-  const current = readJson(currentPath, null);
-  if (!current || typeof current !== 'object') return null;
-  if (current.platform && current.platform !== tokscalePlatformKey()) return null;
-  if (!semver.valid(current.version)) return null;
-  if (typeof current.path !== 'string' || !path.isAbsolute(current.path)) return null;
-  try {
-    const stat = fs.statSync(current.path);
-    if (!stat.isFile()) return null;
-    if (process.platform !== 'win32' && (stat.mode & 0o111) === 0) return null;
-  } catch (_) {
-    return null;
-  }
-  return {
-    source: 'downloaded',
-    path: current.path,
-    version: current.version,
-    installedAt: current.installedAt || '',
-    integrity: current.integrity || ''
-  };
-}
-
-function decideResolver({ downloaded, bundled, shim }) {
-  if (downloaded && !bundled) return downloaded;
-  if (downloaded && bundled && semver.valid(downloaded.version) && semver.valid(bundled.version) && semver.gt(downloaded.version, bundled.version)) {
-    return downloaded;
-  }
-  return bundled || shim || null;
-}
-
+// The bundled binary is the only native candidate: packaging swaps the pinned
+// fork build into @tokscale/cli-<platform>, and an upstream npm build would
+// silently drop the downstream session/workspace report grouping. A
+// `current.json` pointer left behind by the retired npm updater is ignored.
 function resolvePlatformBinary() {
-  const bundled = locateBundledBinary();
-  const downloaded = readDownloadedPointer();
-  const shim = { source: 'shim', path: TOKSCALE_BIN_JS, version: null };
-  return decideResolver({ downloaded, bundled, shim });
+  return locateBundledBinary() || { source: 'shim', path: TOKSCALE_BIN_JS, version: null };
+}
+
+// Declared app build metadata, not verification of the executable's bytes.
+function readTokscaleBundledBuild(manifest = readJson(path.join(__dirname, '../../scripts/vendor/tokscale.json'), null)) {
+  if (!manifest || ![undefined, null, 'override'].includes(manifest.mode)) return null;
+  if (typeof manifest.commit !== 'string' || !/^[0-9a-f]{40}$/i.test(manifest.commit)) return null;
+  if (typeof manifest.releaseTag !== 'string' || !manifest.releaseTag) return null;
+  return { releaseTag: manifest.releaseTag, commit: manifest.commit };
+}
+
+function getTokscaleStatus() {
+  if (bundledPackageCandidates().length === 0) return { supported: false };
+  const current = resolvePlatformBinary();
+  return {
+    supported: true,
+    current: { source: current.source, version: current.version, path: current.path },
+    bundledBuild: readTokscaleBundledBuild()
+  };
 }
 
 // Tokscale reads a few XDG environment variables with a bare
@@ -3633,7 +3620,6 @@ module.exports = {
   mergeClientActivityDays,
   wslPeriodsForPreview,
   statusFromSignals,
-  decideResolver,
   DEFAULT_HISTORY_INTERVAL_MS,
   HISTORY_INTERVAL_VALUES,
   LIMITS_RESET_BOUNDARY_MAX_TIMER_MS,
@@ -3645,7 +3631,8 @@ module.exports = {
   lookupModelPricing,
   normalizePromaPricing,
   pruneAttemptedResetBoundaries,
-  readDownloadedPointer,
+  getTokscaleStatus,
+  readTokscaleBundledBuild,
   resolvePlatformBinary,
   resolvePromaPricing,
   resetPromaPricingCache,

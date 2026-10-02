@@ -461,6 +461,8 @@
   // `{full: 'text'}` renders one full-width line that wraps in place — a long
   // sentence in a nowrap cell would push the popover past the window edge —
   // and `{separated: true}` draws a divider above it for a second block.
+  // `{caption: true}` marks secondary text; `{heading: true}` marks a section
+  // title whose emphasis is styled by the caller's wrapper.
   // `ariaLabel` overrides the spoken label for callers whose cells don't read
   // as `<name>: <value>` on their own.
   function limitDetailInfoNode(entries, extraClass = '', ariaLabel = '') {
@@ -500,6 +502,7 @@
         full.className = [
           'limit-detail-tooltip-full',
           entry?.caption === true ? 'is-caption' : '',
+          entry?.heading === true ? 'is-heading' : '',
           entry?.separated === true ? 'is-separated' : ''
         ].filter(Boolean).join(' ');
         full.textContent = String(entry?.full ?? '');
@@ -1832,45 +1835,47 @@
   function codexResetForecastTooltip(forecast) {
     const entries = [];
     const disclaimer = t('limits.codexResetForecast.disclaimer');
-    const resetType = codexResetForecastType(
-      forecast?.status === 'scheduled' ? forecast?.scheduledResetType : forecast?.latestResetType
-    );
-    if (resetType) {
-      entries.push([t('limits.codexResetForecast.resetType'), resetType]);
+    const isScheduled = forecast?.status === 'scheduled';
+    const isActiveForecast = forecast?.status === 'active' && !codexResetForecastExpired(forecast);
+    if (isScheduled) {
+      const resetType = codexResetForecastType(forecast.scheduledResetType);
+      entries.push({
+        full: [t('limits.codexResetForecast.scheduled'), resetType].filter(Boolean).join(' · '),
+        heading: true
+      });
+      const scheduledFor = codexResetForecastDate(forecast.scheduledFor);
+      const scheduledIn = codexResetForecastTimeUntil(forecast.scheduledFor);
+      if (scheduledFor) {
+        entries.push({ full: [scheduledFor, scheduledIn].filter(Boolean).join(' · ') });
+      }
+    } else if (isActiveForecast) {
+      entries.push({ full: t('limits.codexResetForecast.signal'), heading: true });
+      const expiresAt = codexResetForecastDate(forecast.expiresAt);
+      const expiresIn = codexResetForecastTimeUntil(forecast.expiresAt);
+      if (expiresAt) {
+        entries.push({
+          full: `${t('limits.codexResetForecast.expiresLabel')} ${[expiresAt, expiresIn].filter(Boolean).join(' · ')}`
+        });
+      }
     }
-    const scheduledFor = codexResetForecastDate(forecast?.scheduledFor);
-    const scheduledIn = codexResetForecastTimeUntil(forecast?.scheduledFor);
-    if (scheduledFor) {
-      entries.push([
-        t('limits.codexResetForecast.scheduledFor'),
-        [scheduledFor, scheduledIn].filter(Boolean).join(' · ')
-      ]);
+    if (isScheduled || isActiveForecast) {
+      const sourceObservedAt = isScheduled ? forecast.scheduledAnnouncedAt : forecast.observedAt;
+      const source = [
+        codexResetForecastSourceAuthor(forecast.sourceAuthor),
+        codexResetForecastAge(sourceObservedAt)
+      ].filter(Boolean).join(' · ');
+      if (source) entries.push({ full: source, caption: true });
     }
     const latestReset = codexResetForecastDate(forecast?.latestResetAt);
-    if (latestReset) {
-      const age = codexResetForecastAge(forecast.latestResetAt);
-      entries.push([t('limits.codexResetForecast.lastReset'), [latestReset, age].filter(Boolean).join(' · ')]);
-    }
-    const sourceObservedAt = forecast?.status === 'scheduled'
-      ? forecast?.scheduledAnnouncedAt
-      : forecast?.observedAt;
-    const source = [
-      codexResetForecastSourceAuthor(forecast?.sourceAuthor),
-      codexResetForecastAge(sourceObservedAt)
-    ].filter(Boolean).join(' · ');
-    if (source) {
-      const sourceLabel = forecast?.status === 'scheduled'
-        ? 'limits.codexResetForecast.sourceAnnouncement'
-        : 'limits.codexResetForecast.sourceSignal';
-      entries.push([t(sourceLabel), source]);
-    }
-    const expiresAt = codexResetForecastDate(forecast?.expiresAt);
-    const expiresIn = codexResetForecastTimeUntil(forecast?.expiresAt);
-    if (expiresAt) {
-      entries.push([
-        t('limits.codexResetForecast.expiresLabel'),
-        [expiresAt, expiresIn].filter(Boolean).join(' · ')
-      ]);
+    const latestResetType = codexResetForecastType(forecast?.latestResetType);
+    if (latestReset || latestResetType) {
+      const age = latestReset ? codexResetForecastAge(forecast.latestResetAt) : '';
+      entries.push({
+        full: [t('limits.codexResetForecast.lastReset'), age].filter(Boolean).join(' · '),
+        heading: true,
+        separated: entries.length > 0
+      });
+      entries.push({ full: [latestResetType, latestReset].filter(Boolean).join(' · ') });
     }
     if (forecast?.error && forecast.errorKind !== 'invalid-response') {
       entries.push([
@@ -1886,7 +1891,7 @@
     const info = limitDetailInfoNode(
       entries,
       'codex-reset-forecast-info-wrap',
-      [...entries.map(([label, value]) => `${label}: ${value}`), disclaimer].join(', ')
+      [...entries.map((entry) => Array.isArray(entry) ? `${entry[0]}: ${entry[1]}` : entry.full), disclaimer].join(', ')
     );
     const tooltip = info.querySelector('.limit-detail-tooltip');
     if (tooltip) {

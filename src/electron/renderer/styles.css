@@ -4266,7 +4266,6 @@ html.is-windows .settings-panel select option {
   white-space: nowrap;
   pointer-events: none;
 }
-.codex-reset-forecast:hover :is(.codex-reset-forecast-label, .codex-reset-forecast-value),
 .codex-reset-forecast:has(.codex-reset-forecast-open:focus-visible) :is(.codex-reset-forecast-label, .codex-reset-forecast-value) {
   color: var(--accent);
 }
@@ -4288,6 +4287,17 @@ html.is-windows .settings-panel select option {
   font-weight: 400;
   line-height: 1.2;
   text-align: left;
+}
+.codex-reset-forecast-info-wrap .limit-detail-tooltip-full.is-heading {
+  color: var(--text);
+  font-weight: 600;
+  opacity: 0.82;
+}
+.codex-reset-forecast-info-wrap .limit-detail-tooltip-full.is-separated {
+  position: relative;
+  margin-top: 5px;
+  padding-top: 8px;
+  border-top: 0;
 }
 .codex-reset-forecast-info-wrap .limit-detail-tooltip::after {
   right: auto;
@@ -4477,6 +4487,7 @@ html.is-windows .limit-live-badge {
   margin-top: 10px;
   padding-top: 10px;
 }
+.codex-reset-forecast-info-wrap .limit-detail-tooltip-full.is-separated::before,
 .limit-account-row + .limit-account-row::before,
 .codex-reset-forecast::before {
   position: absolute;
